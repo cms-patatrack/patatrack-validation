@@ -498,6 +498,7 @@ function make_validation_plots() {
       if [ "$WORKFLOW" == "$REFERENCE_WORKFLOW" ]; then
         # reference workflow
         makeTrackValidationPlots.py \
+          --extended \
           --html-sample $DATASET \
           --html-validation-name $DATASET \
           --outputDir $UPLOAD_DIR/$JOBID/$WORKDIR/$REFERENCE_WORKFLOW \
