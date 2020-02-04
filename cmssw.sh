@@ -11,8 +11,8 @@ REFERENCE_RELEASE=CMSSW_11_0_0
 # Development branch and latest release
 #DEVELOPMENT_BRANCH=master
 #DEVELOPMENT_RELEASE=CMSSW_11_0_0
-DEVELOPMENT_BRANCH=CMSSW_11_0_X_Patatrack
-DEVELOPMENT_RELEASE=CMSSW_11_0_0_Patatrack
+DEVELOPMENT_BRANCH=CMSSW_11_1_X_Patatrack
+DEVELOPMENT_RELEASE=CMSSW_11_1_0_pre2_Patatrack
 
 # Number of threads and streams used in each job
 THREADS=8
