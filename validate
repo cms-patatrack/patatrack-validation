@@ -107,6 +107,9 @@ upload_report $ISSUE_NUMBER $COMMENT_ID
 # make validation plots
 make_validation_plots $DIRECTORIES
 upload_report $ISSUE_NUMBER $COMMENT_ID
+# make GpuVsCpu plots
+make_gpucpu_plots $DIRECTORIES
+upload_report $ISSUE_NUMBER $COMMENT_ID
 # make throughput plots
 make_throughput_plots $DIRECTORIES
 upload_report $ISSUE_NUMBER $COMMENT_ID

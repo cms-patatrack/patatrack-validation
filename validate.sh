@@ -501,6 +501,80 @@ function make_validation_plots() {
   done
 }
 
+function make_gpucpu_plots() {
+  [ "$1" ] || return 1
+  local DIRNAME="${!#}"
+  local REFERENCE_RELEASE="$1"
+  local -a RELEASES=("$@")
+  shift
+  local -a TESTING_RELEASES=($@)
+  cd $BASE/$DIRNAME
+  eval $(scram runtime -sh)
+
+  report "### Validation plots (CPU vs GPU)"
+
+  local SAMPLE
+  for SAMPLE in $SAMPLES; do
+    local DATASET=${!SAMPLE}
+    report "#### $DATASET"
+    local WORKDIR=$(echo $DATASET | cut -d/ -f 2-3 --output-delimiter=-)
+    mkdir -p $BASE/plots/gpu_vs_cpu/$WORKDIR
+    cd $BASE/plots/gpu_vs_cpu/$WORKDIR
+
+    # # reference release and workflow
+    # local FILE=$BASE/$DEVELOPMENT_RELEASE/run/$WORKDIR/$REFERENCE_WORKFLOW/$DQMFILE
+    # [ -f $FILE ] && ln -s $FILE ${REFERENCE_RELEASE}-${REFERENCE_WORKFLOW}.root
+
+    # development releases and workflows
+    local RELEASE
+    for RELEASE in ${TESTING_RELEASES[@]}; do
+      local WORKFLOW
+      for WORKFLOW in $PIXEL_GPU_WORKFLOWS $PIXEL_CPU_WORKFLOWS; do
+        local FILE=$BASE/$RELEASE/run/$WORKDIR/$WORKFLOW/$DQMFILE
+        [ -f $FILE ] && ln -s $FILE ${RELEASE}-${WORKFLOW}.root
+        FILE=$BASE/$RELEASE/run/$WORKDIR/$WORKFLOW/scan.csv
+        [ -f $FILE ] && ln -s $FILE ${RELEASE}-${WORKFLOW}.csv
+      done
+    done
+
+    local GPU_WFS=($PIXEL_GPU_WORKFLOWS)
+    local CPU_WFS=($PIXEL_CPU_WORKFLOWS)
+    # validation of all workflows across all releases
+    local NUMWFS=${#GPU_WFS[@]}
+    local I
+    for I in `seq 1 $NUMWFS`; do
+
+      GPU_WORKFLOW=${GPU_WFS[$I-1]}
+      CPU_WORKFLOW=${CPU_WFS[$I-1]}
+      local PULLDIR=${CPU_WORKFLOW}_vs_${GPU_WORKFLOW}
+      mkdir -p $LOCAL_DIR/$JOBID/$WORKDIR/$PULLDIR
+
+      if  has_pixel_validation $GPU_WORKFLOW  &&  has_pixel_validation $CPU_WORKFLOW;  then
+        # other workflows
+        local FILES=""
+        local RELEASE
+        for RELEASE in ${TESTING_RELEASES[@]}; do
+          [ -f ${RELEASE}-${WORKFLOW}.root ] && \
+          FILES="$FILES ${RELEASE}-${GPU_WORKFLOW}.root" && \
+          FILES="$FILES ${RELEASE}-${CPU_WORKFLOW}.root"
+        done
+        if [ "$FILES" ]; then
+          makeTrackValidationPlots.py \
+            --extended \
+            --html-sample $DATASET \
+            --html-validation-name $DATASET \
+            --outputDir $LOCAL_DIR/$JOBID/$WORKDIR/$PULLDIR \
+            $FILES
+          report "  - tracking validation [plots]($UPLOAD_URL/$JOBID/$WORKDIR/$PULLDIR/index.html) and [summary]($UPLOAD_URL/$JOBID/$WORKDIR/$PULLDIR/plots_summary.html) for workflows $GPU_WORKFLOW and $CPU_WORKFLOW"
+        else
+          report "  - :warning: tracking validation plots and summary for workflows $GPU_WORKFLOW and $CPU_WORKFLOW are **missing**"
+        fi
+      fi
+    done
+    report
+  done
+}
+
 # Make throughput plots, based on the scan of the benchmark of the profile,
 # and upload them to the EOS www area.
 #
