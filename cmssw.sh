@@ -6,7 +6,7 @@ export SCRAM_ARCH=slc7_amd64_gcc900
 source $VO_CMS_SW_DIR/cmsset_default.sh
 
 # Reference release
-REFERENCE_RELEASE=CMSSW_11_3_0_pre3
+REFERENCE_RELEASE=CMSSW_11_3_0_pre5
 
 # Development branch and latest release
 DEVELOPMENT_RELEASE=$REFERENCE_RELEASE
