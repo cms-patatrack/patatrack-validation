@@ -188,7 +188,8 @@ function build_data_matrix() {
     cd $CMSSW_BASE/run/$WORKDIR
     for WORKFLOW in $WORKFLOWS; do
       # check the the workflow actually exists in the release
-      runTheMatrix.py -n -e -l $WORKFLOW | grep -q ^$WORKFLOW || continue
+      GROUP=$(get_workflow_group $WORKFLOW)
+      runTheMatrix.py -n -e -w $GROUP -l $WORKFLOW | grep -q ^$WORKFLOW || continue
       mkdir -p $WORKFLOW
       cd $WORKFLOW
 
@@ -196,8 +197,8 @@ function build_data_matrix() {
       cp $VALIDATION/parts/sourceFromRaw_${WORKDIR}_cff.py sourceFromRaw_cff.py
 
       # extract step3 and step4 commands
-      local STEP3="$(runTheMatrix.py -n -e -l $WORKFLOW | grep 'cmsDriver.py step3' | cut -d: -f2- | sed -e"s/^ *//" -e"s/ \+--conditions *[^ ]\+/ --conditions $MY_GLOBALTAG/" -e"s/ \+-n *[^ ]\+/ -n $MY_NUMEVENTS/") --fileout file:step3.root"
-      local STEP4="$(runTheMatrix.py -n -e -l $WORKFLOW | grep 'cmsDriver.py step4' | cut -d: -f2- | sed -e"s/^ *//" -e"s/ \+--conditions *[^ ]\+/ --conditions $MY_GLOBALTAG/" -e"s/ \+-n *[^ ]\+/ -n $MY_NUMEVENTS/") --filein file:step3_inDQM.root"
+      local STEP3="$(runTheMatrix.py -n -e -w $GROUP -l $WORKFLOW | grep 'cmsDriver.py step3' | cut -d: -f2- | sed -e"s/^ *//" -e"s/ \+--conditions *[^ ]\+/ --conditions $MY_GLOBALTAG/" -e"s/ \+-n *[^ ]\+/ -n $MY_NUMEVENTS/") --fileout file:step3.root"
+      local STEP4="$(runTheMatrix.py -n -e -w $GROUP -l $WORKFLOW | grep 'cmsDriver.py step4' | cut -d: -f2- | sed -e"s/^ *//" -e"s/ \+--conditions *[^ ]\+/ --conditions $MY_GLOBALTAG/" -e"s/ \+-n *[^ ]\+/ -n $MY_NUMEVENTS/") --filein file:step3_inDQM.root"
 
       echo "# prepare workflow $WORKFLOW"
       $STEP3 $INPUT --no_exec --python_filename=step3.py
