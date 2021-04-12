@@ -1,5 +1,5 @@
 # Local CMSSW installation
-VO_CMS_SW_DIR=/data/cmssw
+VO_CMS_SW_DIR=/cvmfs/cms.cern.ch
 
 # OAuth token to post comments on GitHub
 OAUTH_FILE=$HOME/.patatrack-validation.oauth

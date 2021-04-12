@@ -1,9 +1,12 @@
 # Directory with the validation scripts
 VALIDATION=$(readlink -f $(dirname ${BASH_SOURCE[0]}))
 
-# cuda-memcheck tools options
-INITCHECK_OPTS="--track-unused-memory no"
+# cuda Compute Sanitizer options
+SANITIZER_TOOL="compute-sanitizer"
+SANITIZER_OPTS="--launch-timeout 0 --kill yes --error-exitcode 127 --require-cuda-init yes --nvtx --print-level info --demangle full"
 MEMCHECK_OPTS="--leak-check full --report-api-errors all"
+INITCHECK_OPTS="--track-unused-memory no"
+RACECHECK_OPTS=""
 SYNCCHECK_OPTS=""
 
 function report() {
@@ -12,7 +15,7 @@ function report() {
 
 function apply() {
   PATTERN="$1"; shift
-    for ARG; do echo $PATTERN | sed -e"s/%/$ARG/g"; done
+    for ARG; do echo $PATTERN | sed -e"s#%#$ARG#g"; done
 }
 
 function apply_and_glob() {
@@ -34,9 +37,9 @@ function has_profiling() {
   echo "$PROFILING" | grep -q -w "$WORKFLOW"
 }
 
-function has_memcheck() {
+function has_sanitizer() {
   local WORKFLOW=$1
-  echo "$MEMCHECKS" | grep -q -w "$WORKFLOW"
+  echo "$SANITIZE" | grep -q -w "$WORKFLOW"
 }
 
 function build_matrix() {
@@ -65,6 +68,7 @@ function build_matrix() {
     cd $CMSSW_BASE/run/$WORKDIR
     local GROUP
     for WORKFLOW in $WORKFLOWS; do
+    {
       # check the the workflow actually exists in the release
       GROUP=$(get_workflow_group $WORKFLOW)
       runTheMatrix.py -n -e -w $GROUP -l $WORKFLOW | grep -q ^$WORKFLOW || continue
@@ -72,14 +76,17 @@ function build_matrix() {
       cd $WORKFLOW
 
       # extract step3 and step4 commands
-      local STEP3="$(runTheMatrix.py -n -e -w $GROUP -l $WORKFLOW | grep 'cmsDriver.py step3' | cut -d: -f2- | sed -e"s/^ *//" -e"s/ \+--conditions *[^ ]\+/ --conditions $MY_GLOBALTAG/" -e"s/ \+-n *[^ ]\+/ -n $MY_NUMEVENTS/") --fileout file:step3.root"
-      local STEP4="$(runTheMatrix.py -n -e -w $GROUP -l $WORKFLOW | grep 'cmsDriver.py step4' | cut -d: -f2- | sed -e"s/^ *//" -e"s/ \+--conditions *[^ ]\+/ --conditions $MY_GLOBALTAG/" -e"s/ \+-n *[^ ]\+/ -n $MY_NUMEVENTS/") --filein file:step3_inDQM.root"
+      local STEP3="$(runTheMatrix.py -n -e -w $GROUP -l $WORKFLOW | grep 'cmsDriver.py step3' | cut -d: -f2- | sed -e"s#^ *##" -e"s# \+--conditions *[^ ]\+# --conditions $MY_GLOBALTAG#" -e"s# \+-n *[^ ]\+# -n $MY_NUMEVENTS#") --fileout file:step3.root"
+      local STEP4="$(runTheMatrix.py -n -e -w $GROUP -l $WORKFLOW | grep 'cmsDriver.py step4' | cut -d: -f2- | sed -e"s#^ *##" -e"s# \+--conditions *[^ ]\+# --conditions $MY_GLOBALTAG#" -e"s# \+-n *[^ ]\+# -n $MY_NUMEVENTS#") --filein file:step3_inDQM.root"
 
       echo "# prepare workflow $WORKFLOW"
       $STEP3 $INPUT --no_exec --python_filename=step3.py
       $STEP4        --no_exec --python_filename=step4.py
       # show CUDAService messages and configure multithreading
       cat >> step3.py << @EOF
+
+# Show CUDAService messages
+#process.MessageLogger.categories.append("CUDAService")
 
 # Configure multithreading
 process.options.numberOfThreads = cms.untracked.uint32( $THREADS )
@@ -113,11 +120,14 @@ if 'caHitNtupletCUDA' in process.__dict__:
         cat >> profile.py << @EOF
 
 # Mark CMSSW transitions and modules in the nvprof profile
-from FWCore.ParameterSet.Utilities import moduleLabelsInSequences
-process.NVProfilerService = cms.Service("NVProfilerService",
-    highlightModules = cms.untracked.vstring( moduleLabelsInSequences(process.reconstruction_step) ),
-    showModulePrefetching = cms.untracked.bool( False )
-)
+#from FWCore.ParameterSet.Utilities import moduleLabelsInSequences
+#process.NVProfilerService = cms.Service("NVProfilerService",
+#    highlightModules = cms.untracked.vstring( moduleLabelsInSequences(process.reconstruction_step) ),
+#    showModulePrefetching = cms.untracked.bool( False )
+#)
+
+# Show CUDAService messages
+#process.MessageLogger.categories.append("CUDAService")
 
 # Configure multithreading
 process.options.numberOfThreads = cms.untracked.uint32( $THREADS )
@@ -143,23 +153,29 @@ if 'caHitNtupletCUDA' in process.__dict__:
         fi
       fi
 
-      if has_memcheck $WORKFLOW; then
-        # prepare the workflow to run the various cuda-memcheck checks
-        cp step3.py memcheck.py
-        (( MEMCHECK_NUMEVENTS )) || local MEMCHECK_NUMEVENTS=10
-        cat >> memcheck.py << @EOF
+      if has_sanitizer $WORKFLOW; then
+        # prepare the workflow to run the various CUDA Compute Sanitizer checks
+        if [ -f profile.py ]; then
+          cp profile.py sanitizer.py
+        else
+          cp step3.py sanitizer.py
+        fi
+        (( SANITIZER_NUMEVENTS )) || local SANITIZER_NUMEVENTS=10
+        cat >> sanitizer.py << @EOF
 
 # Set the number of events for the memcheck workflows
 process.maxEvents = cms.untracked.PSet(
-    input = cms.untracked.int32($MEMCHECK_NUMEVENTS)
+    input = cms.untracked.int32($SANITIZER_NUMEVENTS)
 )
 @EOF
       fi
 
       cd ..
+    } &
     done
     echo
   done
+  wait
 }
 
 function build_data_matrix() {
@@ -187,6 +203,7 @@ function build_data_matrix() {
     mkdir -p $CMSSW_BASE/run/$WORKDIR
     cd $CMSSW_BASE/run/$WORKDIR
     for WORKFLOW in $WORKFLOWS; do
+    {
       # check the the workflow actually exists in the release
       GROUP=$(get_workflow_group $WORKFLOW)
       runTheMatrix.py -n -e -w $GROUP -l $WORKFLOW | grep -q ^$WORKFLOW || continue
@@ -197,8 +214,8 @@ function build_data_matrix() {
       cp $VALIDATION/parts/sourceFromRaw_${WORKDIR}_cff.py sourceFromRaw_cff.py
 
       # extract step3 and step4 commands
-      local STEP3="$(runTheMatrix.py -n -e -w $GROUP -l $WORKFLOW | grep 'cmsDriver.py step3' | cut -d: -f2- | sed -e"s/^ *//" -e"s/ \+--conditions *[^ ]\+/ --conditions $MY_GLOBALTAG/" -e"s/ \+-n *[^ ]\+/ -n $MY_NUMEVENTS/") --fileout file:step3.root"
-      local STEP4="$(runTheMatrix.py -n -e -w $GROUP -l $WORKFLOW | grep 'cmsDriver.py step4' | cut -d: -f2- | sed -e"s/^ *//" -e"s/ \+--conditions *[^ ]\+/ --conditions $MY_GLOBALTAG/" -e"s/ \+-n *[^ ]\+/ -n $MY_NUMEVENTS/") --filein file:step3_inDQM.root"
+      local STEP3="$(runTheMatrix.py -n -e -w $GROUP -l $WORKFLOW | grep 'cmsDriver.py step3' | cut -d: -f2- | sed -e"s#^ *##" -e"s# \+--conditions *[^ ]\+# --conditions $MY_GLOBALTAG#" -e"s# \+-n *[^ ]\+# -n $MY_NUMEVENTS#") --fileout file:step3.root"
+      local STEP4="$(runTheMatrix.py -n -e -w $GROUP -l $WORKFLOW | grep 'cmsDriver.py step4' | cut -d: -f2- | sed -e"s#^ *##" -e"s# \+--conditions *[^ ]\+# --conditions $MY_GLOBALTAG#" -e"s# \+-n *[^ ]\+# -n $MY_NUMEVENTS#") --filein file:step3_inDQM.root"
 
       echo "# prepare workflow $WORKFLOW"
       $STEP3 $INPUT --no_exec --python_filename=step3.py
@@ -210,6 +227,9 @@ function build_data_matrix() {
 import sys, os, inspect
 sys.path.append(os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe()))))
 process.load("sourceFromRaw_cff")
+
+# Show CUDAService messages
+#process.MessageLogger.categories.append("CUDAService")
 
 # Configure multithreading
 process.options.numberOfThreads = cms.untracked.uint32( $THREADS )
@@ -235,11 +255,14 @@ sys.path.append(os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentf
 process.load("sourceFromRaw_cff")
 
 # Mark CMSSW transitions and modules in the nvprof profile
-from FWCore.ParameterSet.Utilities import moduleLabelsInSequences
-process.NVProfilerService = cms.Service("NVProfilerService",
-    highlightModules = cms.untracked.vstring( moduleLabelsInSequences(process.reconstruction_step) ),
-    showModulePrefetching = cms.untracked.bool( False )
-)
+#from FWCore.ParameterSet.Utilities import moduleLabelsInSequences
+#process.NVProfilerService = cms.Service("NVProfilerService",
+#    highlightModules = cms.untracked.vstring( moduleLabelsInSequences(process.reconstruction_step) ),
+#    showModulePrefetching = cms.untracked.bool( False )
+#)
+
+# Show CUDAService messages
+#process.MessageLogger.categories.append("CUDAService")
 
 # Configure multithreading
 process.options.numberOfThreads = cms.untracked.uint32( $THREADS )
@@ -253,23 +276,29 @@ if 'caHitNtupletCUDA' in process.__dict__:
         touch .scan_profile
       fi
 
-      if has_memcheck $WORKFLOW; then
-        # prepare the workflow to run the various cuda-memcheck checks
-        cp step3.py memcheck.py
-        (( MEMCHECK_NUMEVENTS )) || local MEMCHECK_NUMEVENTS=10
-        cat >> memcheck.py << @EOF
+      if has_sanitizer $WORKFLOW; then
+        # prepare the workflow to run the various CUDA Compute Sanitizer checks
+        if [ -f profile.py ]; then
+          cp profile.py sanitizer.py
+        else
+          cp step3.py sanitizer.py
+        fi
+        (( SANITIZER_NUMEVENTS )) || local SANITIZER_NUMEVENTS=10
+        cat >> sanitizer.py << @EOF
 
 # Set the number of events for the memcheck workflows
 process.maxEvents = cms.untracked.PSet(
-    input = cms.untracked.int32($MEMCHECK_NUMEVENTS)
+    input = cms.untracked.int32($SANITIZER_NUMEVENTS)
 )
 @EOF
       fi
 
       cd ..
+    } &
     done
     echo
   done
+  wait
 }
 
 
@@ -326,40 +355,40 @@ function run_workflow() {
     fi
   fi
 
-  # (optional) run cuda-memcheck
-  if [ -f memcheck.py ]; then
+  # (optional) run CUDA Compute Sanitizer
+  if [ -f sanitizer.py ]; then
     # initcheck
-    echo -n "# running cuda-memcheck --tool initcheck... "
-    if cuda-memcheck --tool initcheck --error-exitcode 127 $SYNCCHECK_OPTS --log-file initcheck.out -- cmsRun memcheck.py >& initcheck.log; then
-      [ -f initcheck.log ] && cat initcheck.log | c++filt -i > demangled && mv demangled initcheck.log
+    echo -n "# running $SANITIZER_TOOL --tool initcheck... "
+    if $SANITIZER_TOOL $SANITIZER_OPTS --tool initcheck $SYNCCHECK_OPTS --log-file initcheck.out cmsRun sanitizer.py >& initcheck.log; then
+      #[ -f initcheck.log ] && cat initcheck.log | c++filt -i > demangled && mv demangled initcheck.log
       echo "done"
-      touch cuda-initcheck.done
+      touch tool-initcheck.done
     else
       echo "failed"
       tail initcheck.out
-      touch cuda-initcheck.fail
+      touch tool-initcheck.fail
     fi
     # memcheck
-    echo -n "# running cuda-memcheck --tool memcheck... "
-    if cuda-memcheck --tool memcheck --error-exitcode 127 $MEMCHECK_OPTS --log-file memcheck.out -- cmsRun memcheck.py >& memcheck.log; then
-      [ -f memcheck.log ] && cat memcheck.log | c++filt -i > demangled && mv demangled memcheck.log
+    echo -n "# running $SANITIZER_TOOL --tool memcheck... "
+    if $SANITIZER_TOOL $SANITIZER_OPTS --tool memcheck $MEMCHECK_OPTS --log-file memcheck.out cmsRun sanitizer.py >& memcheck.log; then
+      #[ -f memcheck.log ] && cat memcheck.log | c++filt -i > demangled && mv demangled memcheck.log
       echo "done"
-      touch cuda-memcheck.done
+      touch tool-memcheck.done
     else
       echo "failed"
       tail memcheck.out
-      touch cuda-memcheck.fail
+      touch tool-memcheck.fail
     fi
     # synccheck
-    echo -n "# running cuda-memcheck --tool synccheck... "
-    if cuda-memcheck --tool synccheck --error-exitcode 127 $SYNCCHECK_OPTS --log-file synccheck.out -- cmsRun memcheck.py >& synccheck.log; then
-      [ -f synccheck.log ] && cat synccheck.log | c++filt -i > demangled && mv demangled synccheck.log
+    echo -n "# running $SANITIZER_TOOL --tool synccheck... "
+    if $SANITIZER_TOOL $SANITIZER_OPTS --tool synccheck $SYNCCHECK_OPTS --log-file synccheck.out cmsRun sanitizer.py >& synccheck.log; then
+      #[ -f synccheck.log ] && cat synccheck.log | c++filt -i > demangled && mv demangled synccheck.log
       echo "done"
-      touch cuda-synccheck.done
+      touch tool-synccheck.done
     else
       echo "failed"
       tail synccheck.out
-      touch cuda-synccheck.fail
+      touch tool-synccheck.fail
     fi
   fi
 
@@ -415,15 +444,12 @@ function run_workflows_in_parallel() {
 # and upload them to the EOS www area.
 #
 # Usage:
-#   make_validation_plots REFERENCE_RELEASE [[RELEASE ...] TARGET_RELEASE]
+#   make_validation_plots RELEASE [RELEASE ...]
 #
 function make_validation_plots() {
   [ "$1" ] || return 1
   local DIRNAME="${!#}"
-  local REFERENCE_RELEASE="$1"
   local -a RELEASES=("$@")
-  shift
-  local -a TESTING_RELEASES=($@)
   cd $BASE/$DIRNAME
   eval $(scram runtime -sh)
 
@@ -437,19 +463,16 @@ function make_validation_plots() {
     mkdir -p $BASE/plots/$WORKDIR
     cd $BASE/plots/$WORKDIR
 
-    # reference release and workflow
-    local FILE=$BASE/$REFERENCE_RELEASE/run/$WORKDIR/$REFERENCE_WORKFLOW/$DQMFILE
-    [ -f $FILE ] && ln -s $FILE ${REFERENCE_RELEASE}-${REFERENCE_WORKFLOW}.root
-
-    # development releases and workflows
+    # all releases and workflows
     local RELEASE
-    for RELEASE in ${TESTING_RELEASES[@]}; do
+    for RELEASE in ${RELEASES[@]}; do
       local WORKFLOW
       for WORKFLOW in $WORKFLOWS $DATA_WORKFLOWS; do
+        local PART=$(echo $RELEASE | cut -d/ -f1)-$WORKFLOW
         local FILE=$BASE/$RELEASE/run/$WORKDIR/$WORKFLOW/$DQMFILE
-        [ -f $FILE ] && ln -s $FILE ${RELEASE}-${WORKFLOW}.root
+        [ -f $FILE ] && ln -sf $FILE ${PART}.root
         FILE=$BASE/$RELEASE/run/$WORKDIR/$WORKFLOW/scan.csv
-        [ -f $FILE ] && ln -s $FILE ${RELEASE}-${WORKFLOW}.csv
+        [ -f $FILE ] && ln -sf $FILE ${PART}.csv
       done
     done
 
@@ -457,21 +480,13 @@ function make_validation_plots() {
     local WORKFLOW
     for WORKFLOW in $WORKFLOWS $DATA_WORKFLOWS; do
       mkdir -p $LOCAL_DIR/$JOBID/$WORKDIR/$WORKFLOW
-      if [ "$WORKFLOW" == "$REFERENCE_WORKFLOW" ]; then
-        # reference workflow
-        makeTrackValidationPlots.py \
-          --extended \
-          --html-sample $DATASET \
-          --html-validation-name $DATASET \
-          --outputDir $LOCAL_DIR/$JOBID/$WORKDIR/$REFERENCE_WORKFLOW \
-          $(ls ${RELEASES[@]/%/-${REFERENCE_WORKFLOW}.root} 2> /dev/null)
-        report "  - tracking validation [plots]($UPLOAD_URL/$JOBID/$WORKDIR/$WORKFLOW/index.html) and [summary]($UPLOAD_URL/$JOBID/$WORKDIR/$WORKFLOW/plots_summary.html) for workflow $WORKFLOW"
-      elif has_pixel_validation $WORKFLOW; then
-        # other workflows
+      if has_pixel_validation $WORKFLOW; then
         local FILES=""
         local RELEASE
-        for RELEASE in ${TESTING_RELEASES[@]}; do
-          [ -f ${RELEASE}-${WORKFLOW}.root ] && FILES="$FILES ${RELEASE}-${WORKFLOW}.root"
+        for RELEASE in ${RELEASES[@]}; do
+          local PART=$(echo $RELEASE | cut -d/ -f1)-$WORKFLOW
+          [ -f ${PART}.root ] || continue
+          FILES="$FILES ${PART}.root"
         done
         if [ "$FILES" ]; then
           makeTrackValidationPlots.py \
@@ -479,7 +494,7 @@ function make_validation_plots() {
             --html-sample $DATASET \
             --html-validation-name $DATASET \
             --outputDir $LOCAL_DIR/$JOBID/$WORKDIR/$WORKFLOW \
-            $(ls ${REFERENCE_RELEASE}-${REFERENCE_WORKFLOW}.root ${TESTING_RELEASES[0]}-${REFERENCE_WORKFLOW}.root $FILES 2> /dev/null)
+            $FILES
           report "  - tracking validation [plots]($UPLOAD_URL/$JOBID/$WORKDIR/$WORKFLOW/index.html) and [summary]($UPLOAD_URL/$JOBID/$WORKDIR/$WORKFLOW/plots_summary.html) for workflow $WORKFLOW"
         else
           report "  - :warning: tracking validation plots and summary for workflow $WORKFLOW are **missing**"
@@ -493,10 +508,7 @@ function make_validation_plots() {
 function make_gpucpu_plots() {
   [ "$1" ] || return 1
   local DIRNAME="${!#}"
-  local REFERENCE_RELEASE="$1"
   local -a RELEASES=("$@")
-  shift
-  local -a TESTING_RELEASES=($@)
   cd $BASE/$DIRNAME
   eval $(scram runtime -sh)
 
@@ -510,42 +522,39 @@ function make_gpucpu_plots() {
     mkdir -p $BASE/plots/gpu_vs_cpu/$WORKDIR
     cd $BASE/plots/gpu_vs_cpu/$WORKDIR
 
-    # # reference release and workflow
-    # local FILE=$BASE/$DEVELOPMENT_RELEASE/run/$WORKDIR/$REFERENCE_WORKFLOW/$DQMFILE
-    # [ -f $FILE ] && ln -s $FILE ${REFERENCE_RELEASE}-${REFERENCE_WORKFLOW}.root
-
-    # development releases and workflows
+    # all releases and workflows
     local RELEASE
-    for RELEASE in ${TESTING_RELEASES[@]}; do
+    for RELEASE in ${RELEASES[@]}; do
       local WORKFLOW
       for WORKFLOW in $PIXEL_GPU_WORKFLOWS $PIXEL_CPU_WORKFLOWS; do
+        local PART=$(echo $RELEASE | cut -d/ -f1)-$WORKFLOW
         local FILE=$BASE/$RELEASE/run/$WORKDIR/$WORKFLOW/$DQMFILE
-        [ -f $FILE ] && ln -s $FILE ${RELEASE}-${WORKFLOW}.root
+        [ -f $FILE ] && ln -sf $FILE ${PART}.root
         FILE=$BASE/$RELEASE/run/$WORKDIR/$WORKFLOW/scan.csv
-        [ -f $FILE ] && ln -s $FILE ${RELEASE}-${WORKFLOW}.csv
+        [ -f $FILE ] && ln -sf $FILE ${PART}.csv
       done
     done
 
+    # validation of pixel workflows across all releases
     local GPU_WFS=($PIXEL_GPU_WORKFLOWS)
     local CPU_WFS=($PIXEL_CPU_WORKFLOWS)
-    # validation of all workflows across all releases
     local NUMWFS=${#GPU_WFS[@]}
     local I
     for I in `seq 1 $NUMWFS`; do
-
       GPU_WORKFLOW=${GPU_WFS[$I-1]}
       CPU_WORKFLOW=${CPU_WFS[$I-1]}
       local PULLDIR=${CPU_WORKFLOW}_vs_${GPU_WORKFLOW}
       mkdir -p $LOCAL_DIR/$JOBID/$WORKDIR/$PULLDIR
 
-      if  has_pixel_validation $GPU_WORKFLOW  &&  has_pixel_validation $CPU_WORKFLOW;  then
-        # other workflows
+      if has_pixel_validation $GPU_WORKFLOW && has_pixel_validation $CPU_WORKFLOW; then
         local FILES=""
         local RELEASE
-        for RELEASE in ${TESTING_RELEASES[@]}; do
-          [ -f ${RELEASE}-${WORKFLOW}.root ] && \
-          FILES="$FILES ${RELEASE}-${GPU_WORKFLOW}.root" && \
-          FILES="$FILES ${RELEASE}-${CPU_WORKFLOW}.root"
+        for RELEASE in ${RELEASES[@]}; do
+          local CPU_PART=$(echo $RELEASE | cut -d/ -f1)-$CPU_WORKFLOW
+          local GPU_PART=$(echo $RELEASE | cut -d/ -f1)-$GPU_WORKFLOW
+          ( [ -f ${GPU_PART}.root ] && [ -f ${CPU_PART}.root ] ) || continue
+          FILES="$FILES ${GPU_PART}.root"
+          FILES="$FILES ${CPU_PART}.root"
         done
         if [ "$FILES" ]; then
           makeTrackValidationPlots.py \
@@ -568,15 +577,12 @@ function make_gpucpu_plots() {
 # and upload them to the EOS www area.
 #
 # Usage:
-#   make_throughput_plots REFERENCE_RELEASE [[RELEASE ...] TARGET_RELEASE]
+#   make_throughput_plots RELEASE [RELEASE ...]
 #
 function make_throughput_plots() {
   [ "$1" ] || return 1
   local DIRNAME="${!#}"
-  local REFERENCE_RELEASE="$1"
   local -a RELEASES=("$@")
-  shift
-  local -a TESTING_RELEASES=($@)
   cd $BASE/$DIRNAME
   eval $(scram runtime -sh)
 
@@ -590,18 +596,19 @@ function make_throughput_plots() {
     mkdir -p $BASE/plots/$WORKDIR
     cd $BASE/plots/$WORKDIR
 
-    # throughput of all workflows across all development releases
+    # throughput of all workflows across all releases
     local WORKFLOW
     for WORKFLOW in $DATA_WORKFLOWS; do
       mkdir -p $LOCAL_DIR/$JOBID/$WORKDIR/$WORKFLOW
       if has_profiling $WORKFLOW; then
         local FILES=""
         local RELEASE
-        for RELEASE in ${TESTING_RELEASES[@]}; do
+        for RELEASE in ${RELEASES[@]}; do
+          local PART=$(echo $RELEASE | cut -d/ -f1)-$WORKFLOW
           local FILE=$BASE/$RELEASE/run/$WORKDIR/$WORKFLOW/scan.csv
           if [ -f $FILE ]; then
-            ln -s $FILE ${RELEASE}-${WORKFLOW}.csv
-            FILES="$FILES ${RELEASE}-${WORKFLOW}.csv"
+            ln -sf $FILE ${PART}.csv
+            FILES="$FILES ${PART}.csv"
           fi
         done
         if [ "$FILES" ]; then
@@ -637,6 +644,11 @@ function upload_artefacts() {
   local WORKDIR=$2
   local WORKFLOW=$3
   local CWD=$BASE/$RELEASE/run/$WORKDIR/$WORKFLOW
+
+  # skip invalid combinations of datasets and workflows
+  if ! [ -d $CWD ]; then
+    return
+  fi
   report "  - $RELEASE release, workflow $WORKFLOW"
 
   # check the artefacts to look for and upload
@@ -646,7 +658,7 @@ function upload_artefacts() {
 
   for NAME in $NAMES; do
     local FILE=$CWD/$NAME
-    local PART=$JOBID/$WORKDIR/$RELEASE-$WORKFLOW-$NAME
+    local PART=$JOBID/$WORKDIR/$(echo $RELEASE | cut -d/ -f1)-$WORKFLOW-$NAME
     # upload the python configuration file, log, and nvprof results (if they exist)
     copy_if_exists ${FILE}.py      $LOCAL_DIR/${PART}.py
     copy_if_exists ${FILE}.log     $LOCAL_DIR/${PART}.log
@@ -677,47 +689,47 @@ function upload_artefacts() {
     unset FLAG
   done
 
-  # check for cuda-memcheck
-  if [ -f $CWD/memcheck.py ]; then
-    local PART=$JOBID/$WORKDIR/$RELEASE-$WORKFLOW
-    # cuda-memcheck --tool initcheck
+  # check for CUDA Compute Sanitizer
+  if [ -f $CWD/sanitizer.py ]; then
+    local PART=$JOBID/$WORKDIR/$(echo $RELEASE | cut -d/ -f1)-$WORKFLOW
+    # initcheck
     copy_if_exists $CWD/initcheck.out $LOCAL_DIR/$PART-initcheck.out
     copy_if_exists $CWD/initcheck.log $LOCAL_DIR/$PART-initcheck.log
-    if [ -f $CWD/cuda-initcheck.done ]; then
-      report "      - :heavy_check_mark: \`cuda-memcheck --tool initcheck $SYNCCHECK_OPTS\` ([report]($UPLOAD_URL/$PART-initcheck.out), [log]($UPLOAD_URL/$PART-initcheck.log)) did not find any errors"
-    elif [ -f $CWD/cuda-initcheck.fail ]; then
+    if [ -f $CWD/tool-initcheck.done ]; then
+      report "      - :heavy_check_mark: \`$SANITIZER_TOOL --tool initcheck $SYNCCHECK_OPTS\` ([report]($UPLOAD_URL/$PART-initcheck.out), [log]($UPLOAD_URL/$PART-initcheck.log)) did not find any errors"
+    elif [ -f $CWD/tool-initcheck.fail ]; then
       local ERRORS="**some errors**"
       [ -f $CWD/initcheck.out ] && ERRORS="**$(echo $(tail -n1 $CWD/initcheck.out | cut -d: -f2 | sed -e's/========= No CUDA-MEMCHECK results found/no CUDA-MEMCHECK results/'))**"
-      report "      - :x: \`cuda-memcheck --tool initcheck $SYNCCHECK_OPTS\` ([report]($UPLOAD_URL/$PART-initcheck.out), [log]($UPLOAD_URL/$PART-initcheck.log)) found $ERRORS"
+      report "      - :x: \`$SANITIZER_TOOL --tool initcheck $SYNCCHECK_OPTS\` ([report]($UPLOAD_URL/$PART-initcheck.out), [log]($UPLOAD_URL/$PART-initcheck.log)) found $ERRORS"
       unset ERRORS
     else
-      report "      - :warning: \`cuda-memcheck --tool initcheck $SYNCCHECK_OPTS\` did not run"
+      report "      - :warning: \`$SANITIZER_TOOL --tool initcheck $SYNCCHECK_OPTS\` did not run"
     fi
-    # cuda-memcheck --tool memcheck
+    # memcheck
     copy_if_exists $CWD/memcheck.out $LOCAL_DIR/$PART-memcheck.out
     copy_if_exists $CWD/memcheck.log $LOCAL_DIR/$PART-memcheck.log
-    if [ -f $CWD/cuda-memcheck.done ]; then
-      report "      - :heavy_check_mark: \`cuda-memcheck --tool memcheck $MEMCHECK_OPTS\` ([report]($UPLOAD_URL/$PART-memcheck.out), [log]($UPLOAD_URL/$PART-memcheck.log)) did not find any errors"
-    elif [ -f $CWD/cuda-memcheck.fail ]; then
+    if [ -f $CWD/tool-memcheck.done ]; then
+      report "      - :heavy_check_mark: \`$SANITIZER_TOOL --tool memcheck $MEMCHECK_OPTS\` ([report]($UPLOAD_URL/$PART-memcheck.out), [log]($UPLOAD_URL/$PART-memcheck.log)) did not find any errors"
+    elif [ -f $CWD/tool-memcheck.fail ]; then
       local ERRORS="**some errors**"
       [ -f $CWD/memcheck.out ] && ERRORS="**$(echo $(tail -n1 $CWD/memcheck.out | cut -d: -f2 | sed -e's/========= No CUDA-MEMCHECK results found/no CUDA-MEMCHECK results/'))**"
-      report "      - :x: \`cuda-memcheck --tool memcheck $MEMCHECK_OPTS\` ([report]($UPLOAD_URL/$PART-memcheck.out), [log]($UPLOAD_URL/$PART-memcheck.log)) found $ERRORS"
+      report "      - :x: \`$SANITIZER_TOOL --tool memcheck $MEMCHECK_OPTS\` ([report]($UPLOAD_URL/$PART-memcheck.out), [log]($UPLOAD_URL/$PART-memcheck.log)) found $ERRORS"
       unset ERRORS
     else
-      report "      - :warning: \`cuda-memcheck --tool memcheck $MEMCHECK_OPTS\` did not run"
+      report "      - :warning: \`$SANITIZER_TOOL --tool memcheck $MEMCHECK_OPTS\` did not run"
     fi
-    # cuda-memcheck --tool synccheck
+    # synccheck
     copy_if_exists $CWD/synccheck.out $LOCAL_DIR/$PART-synccheck.out
     copy_if_exists $CWD/synccheck.log $LOCAL_DIR/$PART-synccheck.log
-    if [ -f $CWD/cuda-synccheck.done ]; then
-      report "      - :heavy_check_mark: \`cuda-memcheck --tool synccheck $SYNCCHECK_OPTS\` ([report]($UPLOAD_URL/$PART-synccheck.out), [log]($UPLOAD_URL/$PART-synccheck.log)) did not find any errors"
-    elif [ -f $CWD/cuda-synccheck.fail ]; then
+    if [ -f $CWD/tool-synccheck.done ]; then
+      report "      - :heavy_check_mark: \`$SANITIZER_TOOL --tool synccheck $SYNCCHECK_OPTS\` ([report]($UPLOAD_URL/$PART-synccheck.out), [log]($UPLOAD_URL/$PART-synccheck.log)) did not find any errors"
+    elif [ -f $CWD/tool-synccheck.fail ]; then
       local ERRORS="**some errors**"
       [ -f $CWD/synccheck.out ] && ERRORS="**$(echo $(tail -n1 $CWD/synccheck.out | cut -d: -f2 | sed -e's/========= No CUDA-MEMCHECK results found/no CUDA-MEMCHECK results/'))**"
-      report "      - :x: \`cuda-memcheck --tool synccheck $SYNCCHECK_OPTS\` ([report]($UPLOAD_URL/$PART-synccheck.out), [log]($UPLOAD_URL/$PART-synccheck.log)) found $ERRORS"
+      report "      - :x: \`$SANITIZER_TOOL --tool synccheck $SYNCCHECK_OPTS\` ([report]($UPLOAD_URL/$PART-synccheck.out), [log]($UPLOAD_URL/$PART-synccheck.log)) found $ERRORS"
       unset ERRORS
     else
-      report "      - :warning: \`cuda-memcheck --tool synccheck $SYNCCHECK_OPTS\` did not run"
+      report "      - :warning: \`$SANITIZER_TOOL --tool synccheck $SYNCCHECK_OPTS\` did not run"
     fi
   fi
 }
@@ -725,29 +737,23 @@ function upload_artefacts() {
 # Upload nvprof profiles
 #
 # Usage:
-#   upload_profiles REFERENCE_RELEASE [[RELEASE ...] TARGET_RELEASE]
+#   upload_profiles RELEASE [RELEASE ...]
 #
 function upload_profiles() {
   [ "$1" ] || return 1
-  local REFERENCE_RELEASE="$1"
   local -a RELEASES=("$@")
-  shift
-  local -a TESTING_RELEASES=($@)
 
   report "## logs and \`nvprof\`/\`nvvp\` profiles"
 
   local SAMPLE
-  for SAMPLE in $SAMPLES; do
+  for SAMPLE in $SAMPLES $DATA_SAMPLES; do
     local DATASET=${!SAMPLE}
     report "#### $DATASET"
     local WORKDIR=$(echo $DATASET | cut -d/ -f 2-3 --output-delimiter=-)
 
-    # reference release and workflow
-    upload_artefacts $REFERENCE_RELEASE $WORKDIR $REFERENCE_WORKFLOW
-
-    # development releases and workflows
+    # all releases and workflows
     local RELEASE
-    for RELEASE in ${TESTING_RELEASES[@]}; do
+    for RELEASE in ${RELEASES[@]}; do
       local WORKFLOW
       for WORKFLOW in $WORKFLOWS $DATA_WORKFLOWS; do
         upload_artefacts $RELEASE $WORKDIR $WORKFLOW
@@ -760,7 +766,7 @@ function upload_profiles() {
 # Upload the log file
 #
 # Usage:
-#   upload_log_files REFERENCE_RELEASE [[RELEASE ...] TARGET_RELEASE]
+#   upload_log_files RELEASE [RELEASE ...]
 #
 # Note: the releases are used to build the hash of the upload area
 #

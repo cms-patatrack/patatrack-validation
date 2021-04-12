@@ -6,7 +6,7 @@ POST_COMMENT=true
 EDIT_COMMENT=true
 
 # repository with the working branch and pull requests
-REPOSITORY=cms-patatrack
+REPOSITORY=cms-sw
 
 # OAuth token to post comments on GitHub
 if [ "$OAUTH_FILE" ] && [ -f "$OAUTH_FILE" ]; then

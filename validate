@@ -11,8 +11,8 @@
 # Local configuration - should go before the others
 source local.sh
 
-# CMSSW configuration
-source cmssw.sh
+# CMSSW workflows
+source workflows.sh
 
 # DQM configuration
 source dqm.sh
@@ -25,9 +25,6 @@ source input.sh
 
 # Validation scripts
 source validate.sh
-
-# Hash of this script and its configuration
-SCRIPTHASH=$(cat $VALIDATION/*.sh ${BASH_SOURCE[0]} | sha1sum | cut -d' ' -f1)
 
 # Create a temporay working directory
 function join_args() { local IFS=_; echo "$*"; }
@@ -42,85 +39,63 @@ exec &> $BASE/log
 # main
 echo > $REPORT
 
-# upload the report to the last PR given on the command line
-for ISSUE_NUMBER in "$@"; do true; done
+# require a PR number
+PR=$1
+
+if ! [ "$PR" ] || ! (( "$PR" > 0 )); then
+  echo "Usage: `basename $0` PR_NUMBER"
+  exit 1
+fi
+
+# load the CMS environment
+source $VO_CMS_SW_DIR/cmsset_default.sh
+
+# extract the information from the latest PR test
+PR_PATH=`ls -d /cvmfs/cms-ci.cern.ch/week*/cms-sw/cmssw/$PR/*/ | sort  | tail -n1`
+RELEASE=`ls $PR_PATH | grep CMSSW_`
+ARCH=`ls $PR_PATH/$RELEASE/lib`
+
+# create a working area for the reference release
+rm -rf "$BASE"/reference
+mkdir "$BASE"/reference
+cd "$BASE"/reference
+SCRAM_ARCH=$ARCH scram project $RELEASE 2>&1 | tee setup.log
+cd "$BASE"
+
+# create a working areas for the testing release
+rm -rf "$BASE"/testing
+mkdir "$BASE"/testing
+cd "$BASE"/testing
+$PR_PATH/install.sh 2>&1 | tee setup.log
+cd "$BASE"
+
+# working directories for each release
+DIRECTORIES="reference/$RELEASE testing/$RELEASE"
+
+# the PR number is also the issue number
+ISSUE_NUMBER=$PR
 
 # if we can edit the comment after posting it, create an empty comment as a starting point
 COMMENT_ID=$(can_post_comment $ISSUE_NUMBER && $EDIT_COMMENT && upload_report $ISSUE_NUMBER) || true
 
-# set up the reference release
-report "## Validation summary"
-setup_release "reference" $REFERENCE_RELEASE
-report "Reference release [$REFERENCE_RELEASE](https://github.com/cms-sw/cmssw/tree/$REFERENCE_RELEASE) at $(< $BASE/reference/hash)"
-build_matrix "reference" "$REFERENCE_WORKFLOW"
-DIRECTORIES="reference"
+# set up the workflows
+build_matrix "reference/$RELEASE" "$WORKFLOWS"
+build_data_matrix "reference/$RELEASE" "$DATA_WORKFLOWS"
 upload_report $ISSUE_NUMBER $COMMENT_ID
 
-# set up the current development branch
-setup_development_release "development" $DEVELOPMENT_RELEASE $DEVELOPMENT_BRANCH $REPOSITORY
-report "Development branch [$REPOSITORY/$DEVELOPMENT_BRANCH](https://github.com/$REPOSITORY/cmssw/tree/$DEVELOPMENT_BRANCH) at $(< $BASE/development/hash)"
-build_matrix "development" "$WORKFLOWS"
-build_data_matrix "development" "$DATA_WORKFLOWS"
-DIRECTORIES+=" development"
-upload_report $ISSUE_NUMBER $COMMENT_ID
-
-# consider only PRs (not issues)
-PRS=$(filter_PRs "$@")
-
-# if the testing release or branch are not specified, assumen them to be the same as the development ones
-[ "$TESTING_RELEASE" ] || TESTING_RELEASE=$DEVELOPMENT_RELEASE
-[ "$TESTING_BRANCH"  ] || TESTING_BRANCH=$DEVELOPMENT_BRANCH
-
-# if the testing release is different than the development release, set it up from scratch
-TESTING=false
-if [ "$TESTING_RELEASE" != "$DEVELOPMENT_RELEASE" ] || [ "$TESTING_BRANCH"  != "$DEVELOPMENT_BRANCH" ]; then
-  setup_development_release "testing" $TESTING_RELEASE $TESTING_BRANCH $REPOSITORY
-  TESTING=true
-# otherwise, start from a copy of the development release, but only if there are PRs to validate
-elif [ "$PRS" ]; then
-  clone_release "development" "testing"
-  TESTING=true
-fi
-
-# set up the PR(s) to be tested
-if [ "$PRS" ]; then
-  report "Testing branch [$REPOSITORY/$TESTING_BRANCH](https://github.com/$REPOSITORY/cmssw/tree/$TESTING_BRANCH) at $(< $BASE/testing/hash) with PRs:"
-  for PR in $PRS; do
-    echo $PR >> $BASE/testing/PRs
-    git cms-merge-topic -u "$REPOSITORY:$PR"
-    report "  - #$PR at $(git rev-parse --short=12 "$REPOSITORY/refs/pull/$PR/head")"
-  done
-  git rev-parse --short=12 HEAD > ../hash
-
-  # check out all modified packages ...
-  git diff $CMSSW_VERSION --name-only | cut -d/ -f-2 | sort -u | xargs -r git cms-addpkg || true
-  # ... and their dependencies
-  git cms-checkdeps -a
-  # checkout all packages containing CUDA code, and rebuild all checked out packages with debug symbols
-  USER_CXXFLAGS="-g" USER_CUDA_FLAGS="-g -lineinfo" cmsCudaRebuild.sh
-elif $TESTING; then
-  report "Testing branch [$REPOSITORY/$TESTING_BRANCH](https://github.com/$REPOSITORY/cmssw/tree/$TESTING_BRANCH) at $(< $BASE/testing/hash)"
-fi
-
-if $TESTING; then
-  build_matrix "testing" "$WORKFLOWS"
-  build_data_matrix "testing" "$DATA_WORKFLOWS"
-  DIRECTORIES+=" testing"
-fi
-report
+build_matrix "testing/$RELEASE" "$WORKFLOWS"
+build_data_matrix "testing/$RELEASE" "$DATA_WORKFLOWS"
 upload_report $ISSUE_NUMBER $COMMENT_ID
 
 # compute a unique hash for this validation run
-JOBID=$({ echo $SCRIPTHASH; cat $(apply_and_glob "$BASE/%/hash" $DIRECTORIES); } | sha1sum | cut -d' ' -f1)
+JOBID=$({ date; hostname; echo $BASE; } | sha1sum | cut -d' ' -f1)
 echo $JOBID > $BASE/jobid
 
 # download the benchmark scripts
 git clone https://github.com/cms-patatrack/patatrack-scripts.git $BASE/patatrack-scripts
-# change the color palette used to plot the throughpit scans to match the "development" and "testing" releases
-sed -e'/kRed\|kBlue/d' -i $BASE/patatrack-scripts/plot_scan.py
 
 # run the workflows
-run_workflows_in_parallel $DIRECTORIES
+run_workflows $DIRECTORIES
 upload_report $ISSUE_NUMBER $COMMENT_ID
 # make validation plots
 make_validation_plots $DIRECTORIES
@@ -131,9 +106,6 @@ upload_report $ISSUE_NUMBER $COMMENT_ID
 # make throughput plots
 make_throughput_plots $DIRECTORIES
 upload_report $ISSUE_NUMBER $COMMENT_ID
-# upload DQM plots to the GUI
-#upload_dqm_plots $DIRECTORIES
-#upload_report $ISSUE_NUMBER $COMMENT_ID
 # upload nvprof profiles
 upload_profiles $DIRECTORIES
 upload_report $ISSUE_NUMBER $COMMENT_ID
