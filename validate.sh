@@ -605,9 +605,7 @@ function make_throughput_plots() {
           fi
         done
         if [ "$FILES" ]; then
-          if $BASE/patatrack-scripts/plot_scan.py $FILES; then
-            mv plot.png $LOCAL_DIR/$JOBID/$WORKDIR/scan-${WORKFLOW}.png
-            mv zoom.png $LOCAL_DIR/$JOBID/$WORKDIR/zoom-${WORKFLOW}.png
+          if $BASE/patatrack-scripts/plot_scan.py $FILES -o $LOCAL_DIR/$JOBID/$WORKDIR/scan-${WORKFLOW}.png -z $LOCAL_DIR/$JOBID/$WORKDIR/zoom-${WORKFLOW}.png; then
             # Note: the GitHub API does not support uploading files; the link will be dangling until
             # the plots are updloaded
             report "![scan-${WORKFLOW}.png]($UPLOAD_URL/$JOBID/$WORKDIR/scan-${WORKFLOW}.png)"
