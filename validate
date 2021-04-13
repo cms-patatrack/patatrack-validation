@@ -51,7 +51,7 @@ fi
 source $VO_CMS_SW_DIR/cmsset_default.sh
 
 # extract the information from the latest PR test
-PR_PATH=`ls -d /cvmfs/cms-ci.cern.ch/week*/cms-sw/cmssw/$PR/*/ | sort  | tail -n1`
+PR_PATH=`ls -d -1 -t /cvmfs/cms-ci.cern.ch/week*/cms-sw/cmssw/$PR/*/ | head -n1`
 RELEASE=`ls $PR_PATH | grep CMSSW_`
 ARCH=`ls $PR_PATH/$RELEASE/lib`
 
