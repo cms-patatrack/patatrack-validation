@@ -3,7 +3,7 @@ VALIDATION=$(readlink -f $(dirname ${BASH_SOURCE[0]}))
 
 # cuda Compute Sanitizer options
 SANITIZER_TOOL="compute-sanitizer"
-SANITIZER_OPTS="--launch-timeout 0 --kill yes --error-exitcode 127 --require-cuda-init yes --nvtx --print-level info --demangle full"
+SANITIZER_OPTS="--launch-timeout 0 --kill yes --error-exitcode 127 --require-cuda-init yes --nvtx yes --print-level info --demangle full"
 MEMCHECK_OPTS="--leak-check full --report-api-errors all"
 INITCHECK_OPTS="--track-unused-memory no"
 RACECHECK_OPTS=""
@@ -359,7 +359,7 @@ function run_workflow() {
   if [ -f sanitizer.py ]; then
     # initcheck
     echo -n "# running $SANITIZER_TOOL --tool initcheck... "
-    if $SANITIZER_TOOL $SANITIZER_OPTS --tool initcheck $SYNCCHECK_OPTS --log-file initcheck.out cmsRun sanitizer.py >& initcheck.log; then
+    if $SANITIZER_TOOL $SANITIZER_OPTS --tool initcheck $INITCHECK_OPTS --log-file initcheck.out cmsRun sanitizer.py >& initcheck.log; then
       #[ -f initcheck.log ] && cat initcheck.log | c++filt -i > demangled && mv demangled initcheck.log
       echo "done"
       touch tool-initcheck.done
@@ -699,14 +699,14 @@ function upload_artefacts() {
     copy_if_exists $CWD/initcheck.out $LOCAL_DIR/$PART-initcheck.out
     copy_if_exists $CWD/initcheck.log $LOCAL_DIR/$PART-initcheck.log
     if [ -f $CWD/tool-initcheck.done ]; then
-      report "      - :heavy_check_mark: \`$SANITIZER_TOOL --tool initcheck $SYNCCHECK_OPTS\` ([report]($UPLOAD_URL/$PART-initcheck.out), [log]($UPLOAD_URL/$PART-initcheck.log)) did not find any errors"
+      report "      - :heavy_check_mark: \`$SANITIZER_TOOL --tool initcheck $INITCHECK_OPTS\` ([report]($UPLOAD_URL/$PART-initcheck.out), [log]($UPLOAD_URL/$PART-initcheck.log)) did not find any errors"
     elif [ -f $CWD/tool-initcheck.fail ]; then
       local ERRORS="**some errors**"
       [ -f $CWD/initcheck.out ] && ERRORS="**$(echo $(tail -n1 $CWD/initcheck.out | cut -d: -f2 | sed -e's/========= No CUDA-MEMCHECK results found/no CUDA-MEMCHECK results/'))**"
-      report "      - :x: \`$SANITIZER_TOOL --tool initcheck $SYNCCHECK_OPTS\` ([report]($UPLOAD_URL/$PART-initcheck.out), [log]($UPLOAD_URL/$PART-initcheck.log)) found $ERRORS"
+      report "      - :x: \`$SANITIZER_TOOL --tool initcheck $INITCHECK_OPTS\` ([report]($UPLOAD_URL/$PART-initcheck.out), [log]($UPLOAD_URL/$PART-initcheck.log)) found $ERRORS"
       unset ERRORS
     else
-      report "      - :warning: \`$SANITIZER_TOOL --tool initcheck $SYNCCHECK_OPTS\` did not run"
+      report "      - :warning: \`$SANITIZER_TOOL --tool initcheck $INITCHECK_OPTS\` did not run"
     fi
     # memcheck
     copy_if_exists $CWD/memcheck.out $LOCAL_DIR/$PART-memcheck.out
