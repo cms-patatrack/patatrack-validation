@@ -365,7 +365,8 @@ function run_workflow() {
       touch tool-initcheck.done
     else
       echo "failed"
-      tail initcheck.out
+      tail initcheck.log
+      [ -f initcheck.out ] && tail initcheck.out
       touch tool-initcheck.fail
     fi
     # memcheck
@@ -376,7 +377,8 @@ function run_workflow() {
       touch tool-memcheck.done
     else
       echo "failed"
-      tail memcheck.out
+      tail memcheck.log
+      [ -f memcheck.out ] && tail memcheck.out
       touch tool-memcheck.fail
     fi
     # synccheck
@@ -387,7 +389,8 @@ function run_workflow() {
       touch tool-synccheck.done
     else
       echo "failed"
-      tail synccheck.out
+      tail synccheck.log
+      [ -f synccheck.out ] && tail synccheck.out
       touch tool-synccheck.fail
     fi
   fi
