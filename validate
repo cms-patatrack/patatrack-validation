@@ -27,7 +27,7 @@ source input.sh
 source validate.sh
 
 # Create a temporay working directory
-function join_args() { local IFS=_; echo "$*"; }
+function join_args() { local IFS=_; echo "$*" | sed -e's/[^a-zA-Z0-9]/_/g'; }
 BASE=$(mktemp -d -p $PWD $(join_args run "$@").XXXXXXXXXX)
 [ -d $BASE ] || exit 1
 REPORT=$BASE/report.md
@@ -40,10 +40,26 @@ exec &> $BASE/log
 echo > $REPORT
 
 # require a PR number
-PR=$1
+REPO=cmssw
+PULL=$1
+TEST=*
 
-if ! [ "$PR" ] || ! (( "$PR" > 0 )); then
-  echo "Usage: `basename $0` PR_NUMBER"
+if echo $PULL | grep -q '#'; then
+  REPO=$(echo $PULL | cut -d# -f1)
+  PULL=$(echo $PULL | cut -d# -f2)
+fi
+
+if echo $PULL | grep -q '/'; then
+  TEST=$(echo $PULL | cut -d/ -f2)
+  PULL=$(echo $PULL | cut -d/ -f1)
+fi
+
+if ! [ "$PULL" ] || ! (( "$PULL" > 0 )); then
+  echo "Usage: `basename $0` [REPO#]PULL[/TEST]"
+  echo
+  echo "  REPO  can be either cmssw (the default if not given) or cmsdist"
+  echo "  PULL  is the pull request number"
+  echo "  TEST  is the Jenkis test TEST for that PR, or * (default) to automatically use the last one"
   exit 1
 fi
 
@@ -51,7 +67,7 @@ fi
 source $VO_CMS_SW_DIR/cmsset_default.sh
 
 # extract the information from the latest PR test
-PR_PATH=`ls -d -1 -t /cvmfs/cms-ci.cern.ch/week*/cms-sw/cmssw/$PR/*/ | head -n1`
+PR_PATH=`ls -d -1 -t /cvmfs/cms-ci.cern.ch/week*/cms-sw/$REPO/$PULL/$TEST/ | head -n1`
 RELEASE=`ls $PR_PATH | grep CMSSW_`
 ARCH=`ls $PR_PATH/$RELEASE/lib`
 
@@ -73,7 +89,7 @@ cd "$BASE"
 DIRECTORIES="reference/$RELEASE testing/$RELEASE"
 
 # the PR number is also the issue number
-ISSUE_NUMBER=$PR
+ISSUE_NUMBER=$PULL
 
 # if we can edit the comment after posting it, create an empty comment as a starting point
 COMMENT_ID=$(can_post_comment $ISSUE_NUMBER && $EDIT_COMMENT && upload_report $ISSUE_NUMBER) || true
